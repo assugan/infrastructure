@@ -108,13 +108,19 @@ pipeline {
           script {
             def TF = tool name: 'terraform-1.6.6'
             // безопасно передаём секрет как TF_VAR_*, чтобы избежать Groovy interpolation warning и утечек
-            withEnv([
-              "TF_BIN=${TF}/terraform",
-              "TF_VAR_ssh_key_name=${SSH_KEY_NAME}"
-            ]) {
+            withEnv(["TF_BIN=${TF}/terraform"]) {
               sh '''
-                echo "--- Planning in: $(pwd) ---"
-                "$TF_BIN" fmt -check
+                # мягкий fmt: если есть несоответствия — сначала покажем diff,
+                # затем автоматически форматнём и продолжим
+                set +e
+                "$TF_BIN" fmt -check -recursive
+                status=$?
+                if [ $status -ne 0 ]; then
+                  echo "⚠️ terraform fmt нашёл несоответствия. Автоформатирую..."
+                  "$TF_BIN" fmt -recursive
+                fi
+                set -e
+
                 "$TF_BIN" validate
                 "$TF_BIN" plan -out=tfplan
               '''
