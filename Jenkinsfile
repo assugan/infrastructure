@@ -1,7 +1,7 @@
-// Jenkinsfile — INFRA (single-env), Terraform в Docker
+// Jenkinsfile — INFRA (single-env), Terraform через `docker run`
 // Ветки: draft-infra => только plan; main => plan -> approve -> apply -> ansible
 
-def TF_IMAGE = 'hashicorp/terraform:1.6.6'  // можно обновить при желании
+def TF_IMAGE = 'hashicorp/terraform:1.6.6'
 
 pipeline {
   agent any
@@ -31,13 +31,18 @@ pipeline {
     stage('Terraform Init') {
       steps {
         dir('main') {
-          script {
-            // Пробрасываем ~/.aws внутрь контейнера (для профилей/credentials)
-            docker.image(TF_IMAGE).inside('-v $HOME/.aws:/root/.aws:ro') {
-              sh 'terraform version'
-              sh 'terraform init -upgrade'
-            }
-          }
+          // Монтируем текущую папку и ~/.aws внутрь контейнера
+          sh """
+            docker run --rm \
+              -v "\$PWD":/work -w /work \
+              -v "\$HOME/.aws":/root/.aws:ro \
+              ${TF_IMAGE} version
+
+            docker run --rm \
+              -v "\$PWD":/work -w /work \
+              -v "\$HOME/.aws":/root/.aws:ro \
+              ${TF_IMAGE} init -upgrade
+          """
         }
       }
     }
@@ -45,17 +50,23 @@ pipeline {
     stage('Validate & Plan (all branches)') {
       steps {
         dir('main') {
-          script {
-            docker.image(TF_IMAGE).inside('-v $HOME/.aws:/root/.aws:ro') {
-              sh 'terraform fmt -check'
-              sh 'terraform validate'
-              sh """
-                terraform plan \
-                  -var="ssh_key_name=${SSH_KEY_NAME}" \
-                  -out=tfplan
-              """
-            }
-          }
+          sh """
+            docker run --rm \
+              -v "\$PWD":/work -w /work \
+              -v "\$HOME/.aws":/root/.aws:ro \
+              ${TF_IMAGE} fmt -check
+
+            docker run --rm \
+              -v "\$PWD":/work -w /work \
+              -v "\$HOME/.aws":/root/.aws:ro \
+              ${TF_IMAGE} validate
+
+            docker run --rm \
+              -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
+              -v "\$PWD":/work -w /work \
+              -v "\$HOME/.aws":/root/.aws:ro \
+              ${TF_IMAGE} plan -var="ssh_key_name=${SSH_KEY_NAME}" -out=tfplan
+          """
         }
       }
       post {
@@ -66,20 +77,20 @@ pipeline {
 
     stage('Manual Approval (main only)') {
       when { branch 'main' }
-      steps {
-        input message: 'Apply infrastructure?', ok: 'Apply'
-      }
+      steps { input message: 'Apply infrastructure?', ok: 'Apply' }
     }
 
     stage('Apply (main only)') {
       when { branch 'main' }
       steps {
         dir('main') {
-          script {
-            docker.image(TF_IMAGE).inside('-v $HOME/.aws:/root/.aws:ro') {
-              sh 'terraform apply -auto-approve tfplan'
-            }
-          }
+          sh """
+            docker run --rm \
+              -e AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
+              -v "\$PWD":/work -w /work \
+              -v "\$HOME/.aws":/root/.aws:ro \
+              ${TF_IMAGE} apply -auto-approve tfplan
+          """
         }
       }
       post {
@@ -91,18 +102,24 @@ pipeline {
     stage('Ansible Configure (main only)') {
       when { branch 'main' }
       steps {
-        // Достаём IP из Terraform output (тоже через контейнер)
+        // Достаём IP через terraform output (тоже из контейнера)
         dir('main') {
           script {
-            def IP = docker.image(TF_IMAGE).inside('-v $HOME/.aws:/root/.aws:ro') {
-              sh(script: 'terraform output -raw public_ip', returnStdout: true)
-            }.trim()
+            def IP = sh(
+              script: """
+                docker run --rm \
+                  -v "\$PWD":/work -w /work \
+                  -v "\$HOME/.aws":/root/.aws:ro \
+                  ${TF_IMAGE} output -raw public_ip
+              """,
+              returnStdout: true
+            ).trim()
             writeFile file: 'inventory', text: "${IP}\n"
             echo "Inventory generated with host: ${IP}"
           }
         }
 
-        // Применяем Ansible на хосте (должен быть установлен ansible на агенте Jenkins)
+        // Ансибл выполняем на агенте (нужен ansible на машине)
         dir('ansible') {
           sh 'ANSIBLE_HOST_KEY_CHECKING=false ansible -i ../main/inventory all -m ping -u ubuntu || true'
           sh 'ANSIBLE_HOST_KEY_CHECKING=false ansible-playbook -i ../main/inventory site.yml -u ubuntu'
@@ -116,7 +133,7 @@ pipeline {
   }
 }
 
-// безопасная отправка в Telegram (без Groovy-интерполяции)
+// Безопасная отправка в Telegram (без Groovy-интерполяции)
 def notify(String message) {
   withEnv(["MSG=${message}"]) {
     sh '''#!/bin/bash
