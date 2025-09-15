@@ -5,11 +5,10 @@ pipeline {
     AWS_DEFAULT_REGION = 'eu-central-1'
     TF_IN_AUTOMATION   = 'true'
 
-    // Jenkins credentials:
     TELEGRAM_BOT_TOKEN = credentials('telegram-bot-token')
     TELEGRAM_CHAT_ID   = credentials('telegram-chat-id')
 
-    // Строковый credential: имя существующей AWS KeyPair
+    // String credential: имя AWS KeyPair 
     SSH_KEY_NAME       = credentials('ec2-ssh-key')
   }
 
@@ -26,9 +25,13 @@ pipeline {
     stage('Terraform Init') {
       steps {
         dir('main') {
-          withTerraform(installation: 'terraform-1.6.6') {
-            sh 'terraform -version'
-            sh 'terraform init -upgrade'
+          script {
+            // Получаем путь к установленному Tool'у Terraform
+            def TF = tool name: 'terraform-1.6.6'
+            sh """
+              '${TF}/terraform' -version
+              '${TF}/terraform' init -upgrade
+            """
           }
         }
       }
@@ -37,11 +40,13 @@ pipeline {
     stage('Validate & Plan (all branches)') {
       steps {
         dir('main') {
-          withTerraform(installation: 'terraform-1.6.6') {
-            sh 'terraform fmt -check'
-            sh 'terraform validate'
-            // подставляем имя KeyPair из Jenkins credentials
-            sh "terraform plan -var='ssh_key_name=${SSH_KEY_NAME}' -out=tfplan"
+          script {
+            def TF = tool name: 'terraform-1.6.6'
+            sh """
+              '${TF}/terraform' fmt -check
+              '${TF}/terraform' validate
+              '${TF}/terraform' plan -var='ssh_key_name=${SSH_KEY_NAME}' -out=tfplan
+            """
           }
         }
       }
@@ -53,17 +58,16 @@ pipeline {
 
     stage('Manual Approval (main only)') {
       when { branch 'main' }
-      steps {
-        input message: 'Apply infrastructure?', ok: 'Apply'
-      }
+      steps { input message: 'Apply infrastructure?', ok: 'Apply' }
     }
 
     stage('Apply (main only)') {
       when { branch 'main' }
       steps {
         dir('main') {
-          withTerraform(installation: 'terraform-1.6.6') {
-            sh 'terraform apply -auto-approve tfplan'
+          script {
+            def TF = tool name: 'terraform-1.6.6'
+            sh "'${TF}/terraform' apply -auto-approve tfplan"
           }
         }
       }
@@ -76,16 +80,15 @@ pipeline {
     stage('Ansible Configure (main only)') {
       when { branch 'main' }
       steps {
-        // достаём IP из outputs
         dir('main') {
-          withTerraform(installation: 'terraform-1.6.6') {
-            script {
-              def IP = sh(script: "terraform output -raw public_ip", returnStdout: true).trim()
-              writeFile file: 'inventory', text: "${IP}\n"
-              echo "Inventory generated with host: ${IP}"
-            }
+          script {
+            def TF = tool name: 'terraform-1.6.6'
+            def IP = sh(script: "'${TF}/terraform' output -raw public_ip", returnStdout: true).trim()
+            writeFile file: 'inventory', text: "${IP}\n"
+            echo "Inventory generated with host: ${IP}"
           }
         }
+        // На агенте должен быть установлен ansible; если нет — скажи, дам контейнерный вариант
         dir('ansible') {
           sh 'ANSIBLE_HOST_KEY_CHECKING=false ansible -i ../main/inventory all -m ping -u ubuntu || true'
           sh 'ANSIBLE_HOST_KEY_CHECKING=false ansible-playbook -i ../main/inventory site.yml -u ubuntu'
