@@ -1,0 +1,65 @@
+---
+- name: Ensure monitoring directory
+  file:
+    path: /home/ubuntu/monitoring
+    state: directory
+    owner: ubuntu
+    group: ubuntu
+    mode: '0755'
+
+- name: Ensure grafana provisioning dirs
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: ubuntu
+    group: ubuntu
+    mode: '0755'
+  loop:
+    - /home/ubuntu/monitoring/grafana/provisioning/datasources
+    - /home/ubuntu/monitoring/grafana/provisioning/dashboards
+    - /home/ubuntu/monitoring/grafana/dashboards
+
+- name: Upload prometheus.yml
+  copy:
+    src: prometheus.yml
+    dest: /home/ubuntu/monitoring/prometheus.yml
+    owner: ubuntu
+    group: ubuntu
+    mode: '0644'
+
+- name: Upload monitoring compose
+  copy:
+    src: docker-compose.yml
+    dest: /home/ubuntu/monitoring/docker-compose.yml
+    owner: ubuntu
+    group: ubuntu
+    mode: '0644'
+
+- name: Upload Grafana datasource
+  copy:
+    src: grafana/provisioning/datasources/datasource.yml
+    dest: /home/ubuntu/monitoring/grafana/provisioning/datasources/datasource.yml
+    owner: ubuntu
+    group: ubuntu
+    mode: '0644'
+
+- name: Upload Grafana dashboards provider
+  copy:
+    src: grafana/provisioning/dashboards/dashboards.yml
+    dest: /home/ubuntu/monitoring/grafana/provisioning/dashboards/dashboards.yml
+    owner: ubuntu
+    group: ubuntu
+    mode: '0644'
+
+- name: Upload default dashboard
+  copy:
+    src: grafana/dashboards/node_container_overview.json
+    dest: /home/ubuntu/monitoring/grafana/dashboards/node_container_overview.json
+    owner: ubuntu
+    group: ubuntu
+    mode: '0644'
+
+- name: Start/Update monitoring stack
+  command: docker compose up -d
+  args:
+    chdir: /home/ubuntu/monitoring

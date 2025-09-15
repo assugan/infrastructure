@@ -1,0 +1,100 @@
+{
+  "id": null,
+  "uid": "node-cont-overview",
+  "title": "Node & Containers Overview",
+  "tags": ["prometheus", "node", "cadvisor"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "CPU Usage (node) %",
+      "gridPos": { "x": 0, "y": 0, "w": 8, "h": 6 },
+      "targets": [
+        {
+          "expr": "100 - (avg by(instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[2m])) * 100)",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+    },
+    {
+      "type": "stat",
+      "title": "Memory Usage (node) %",
+      "gridPos": { "x": 8, "y": 0, "w": 8, "h": 6 },
+      "targets": [
+        {
+          "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+    },
+    {
+      "type": "stat",
+      "title": "Root FS Usage %",
+      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 6 },
+      "targets": [
+        {
+          "expr": "(1 - (node_filesystem_avail_bytes{mountpoint=\"/\",fstype!=\"rootfs\"} / node_filesystem_size_bytes{mountpoint=\"/\",fstype!=\"rootfs\"})) * 100",
+          "legendFormat": "/"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+    },
+    {
+      "type": "stat",
+      "title": "Running Containers",
+      "gridPos": { "x": 0, "y": 6, "w": 8, "h": 6 },
+      "targets": [
+        { "expr": "count(count by (id) (container_last_seen{image!=\"\"} > time() - 60))" }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+    },
+    {
+      "type": "bargauge",
+      "title": "Top Containers CPU (5m avg)",
+      "gridPos": { "x": 8, "y": 6, "w": 8, "h": 6 },
+      "targets": [
+        {
+          "expr": "topk(5, sum by (name) (rate(container_cpu_usage_seconds_total{name!=\"\",image!=\"\"}[5m])))",
+          "legendFormat": "{{name}}"
+        }
+      ],
+      "options": { "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "bargauge",
+      "title": "Top Containers RSS (bytes)",
+      "gridPos": { "x": 16, "y": 6, "w": 8, "h": 6 },
+      "targets": [
+        {
+          "expr": "topk(5, max by (name) (container_memory_rss{name!=\"\",image!=\"\"}))",
+          "legendFormat": "{{name}}"
+        }
+      ],
+      "options": { "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "table",
+      "title": "Targets UP",
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "up",
+          "legendFormat": "{{job}} {{instance}}"
+        }
+      ],
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        { "id": "filterFieldsByName", "options": { "include": ["Value", "job", "instance"] } }
+      ]
+    }
+  ],
+  "templating": { "list": [] }
+}
