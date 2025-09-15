@@ -3,11 +3,11 @@ data "aws_ami" "ubuntu_2404" {
   most_recent = true
   owners      = ["099720109477"] # Canonical
   filter {
-    name = "name"
+    name   = "name"
     values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"]
   }
   filter {
-    name = "virtualization-type"
+    name   = "virtualization-type"
     values = ["hvm"]
   }
 }
@@ -29,5 +29,5 @@ resource "aws_instance" "web" {
 resource "aws_eip" "web" {
   instance = aws_instance.web.id
   domain   = "vpc"
-  tags = { Name = "eip-web-single" }
+  tags     = { Name = "eip-web-single" }
 }
