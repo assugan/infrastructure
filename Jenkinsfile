@@ -8,7 +8,7 @@ pipeline {
     TELEGRAM_BOT_TOKEN = credentials('telegram-bot-token')
     TELEGRAM_CHAT_ID   = credentials('telegram-chat-id')
 
-    // String credential: имя AWS KeyPair 
+    // String credential: ИМЯ AWS KeyPair
     SSH_KEY_NAME       = credentials('ec2-ssh-key')
   }
 
@@ -22,16 +22,81 @@ pipeline {
       }
     }
 
+    stage('Debug Repo Layout') {
+      steps {
+        sh '''
+          echo "=== WORKSPACE ==="
+          pwd
+          echo "=== TREE ==="
+          ls -la
+          echo "=== .tf files (first 2 levels) ==="
+          find . -maxdepth 2 -name "*.tf" -print || true
+        '''
+      }
+    }
+
+    stage('Detect Terraform directory') {
+      steps {
+        script {
+          // ищем где лежат *.tf: сначала main/, потом infra/, потом корень
+          def guess = sh(
+            script: '''
+              set -e
+              for d in main infra .; do
+                if [ -d "$d" ] && ls -1 "$d"/*.tf >/dev/null 2>&1; then
+                  echo "$d"
+                  exit 0
+                fi
+              done
+              # если не нашли — попробуем найти первый каталог с .tf на глубине 2
+              dir=$(dirname "$(find . -maxdepth 2 -name "*.tf" -print | head -n1)") || true
+              if [ -n "$dir" ]; then
+                echo "$dir"
+                exit 0
+              fi
+              exit 1
+            ''',
+            returnStatus: true
+          ) == 0 ? sh(script: 'echo "$?" >/dev/null; ', returnStdout: true) : null
+
+          // Увы, принять stdout из пред. шага нельзя — сделаем отдельно, чтобы получить сам путь:
+          def tfDir = sh(
+            script: '''
+              set -e
+              for d in main infra .; do
+                if [ -d "$d" ] && ls -1 "$d"/*.tf >/dev/null 2>&1; then
+                  echo "$d"
+                  exit 0
+                fi
+              done
+              dir=$(dirname "$(find . -maxdepth 2 -name "*.tf" -print | head -n1)") || true
+              [ -n "$dir" ] && echo "$dir" || true
+            ''',
+            returnStdout: true
+          ).trim()
+
+          if (!tfDir) {
+            error "Не найден каталог с Terraform (.tf). Проверь структуру репозитория."
+          }
+          echo "Terraform directory detected: ${tfDir}"
+          env.TF_DIR = tfDir
+        }
+      }
+    }
+
     stage('Terraform Init') {
       steps {
-        dir('main') {
+        dir("${env.TF_DIR}") {
           script {
-            // Получаем путь к установленному Tool'у Terraform
             def TF = tool name: 'terraform-1.6.6'
-            sh """
-              '${TF}/terraform' -version
-              '${TF}/terraform' init -upgrade
-            """
+            withEnv(["TF_BIN=${TF}/terraform"]) {
+              sh '''
+                "$TF_BIN" -version
+                pwd
+                ls -la
+                "$TF_BIN" init -upgrade
+              '''
+            }
           }
         }
       }
@@ -39,14 +104,21 @@ pipeline {
 
     stage('Validate & Plan (all branches)') {
       steps {
-        dir('main') {
+        dir("${env.TF_DIR}") {
           script {
             def TF = tool name: 'terraform-1.6.6'
-            sh """
-              '${TF}/terraform' fmt -check
-              '${TF}/terraform' validate
-              '${TF}/terraform' plan -var='ssh_key_name=${SSH_KEY_NAME}' -out=tfplan
-            """
+            // безопасно передаём секрет как TF_VAR_*, чтобы избежать Groovy interpolation warning и утечек
+            withEnv([
+              "TF_BIN=${TF}/terraform",
+              "TF_VAR_ssh_key_name=${SSH_KEY_NAME}"
+            ]) {
+              sh '''
+                echo "--- Planning in: $(pwd) ---"
+                "$TF_BIN" fmt -check
+                "$TF_BIN" validate
+                "$TF_BIN" plan -out=tfplan
+              '''
+            }
           }
         }
       }
@@ -64,10 +136,14 @@ pipeline {
     stage('Apply (main only)') {
       when { branch 'main' }
       steps {
-        dir('main') {
+        dir("${env.TF_DIR}") {
           script {
             def TF = tool name: 'terraform-1.6.6'
-            sh "'${TF}/terraform' apply -auto-approve tfplan"
+            withEnv(["TF_BIN=${TF}/terraform"]) {
+              sh '''
+                "$TF_BIN" apply -auto-approve tfplan
+              '''
+            }
           }
         }
       }
@@ -80,18 +156,18 @@ pipeline {
     stage('Ansible Configure (main only)') {
       when { branch 'main' }
       steps {
-        dir('main') {
+        dir("${env.TF_DIR}") {
           script {
             def TF = tool name: 'terraform-1.6.6'
-            def IP = sh(script: "'${TF}/terraform' output -raw public_ip", returnStdout: true).trim()
+            def IP = sh(script: "\"${TF}/terraform\" output -raw public_ip", returnStdout: true).trim()
             writeFile file: 'inventory', text: "${IP}\n"
             echo "Inventory generated with host: ${IP}"
           }
         }
         // На агенте должен быть установлен ansible; если нет — скажи, дам контейнерный вариант
         dir('ansible') {
-          sh 'ANSIBLE_HOST_KEY_CHECKING=false ansible -i ../main/inventory all -m ping -u ubuntu || true'
-          sh 'ANSIBLE_HOST_KEY_CHECKING=false ansible-playbook -i ../main/inventory site.yml -u ubuntu'
+          sh 'ANSIBLE_HOST_KEY_CHECKING=false ansible -i ../${TF_DIR}/inventory all -m ping -u ubuntu || true'
+          sh 'ANSIBLE_HOST_KEY_CHECKING=false ansible-playbook -i ../${TF_DIR}/inventory site.yml -u ubuntu'
         }
       }
       post {
@@ -102,7 +178,6 @@ pipeline {
   }
 }
 
-// Безопасная отправка в Telegram (без Groovy-интерполяции $)
 def notifyTG(String message) {
   withEnv(["MSG=${message}"]) {
     sh '''#!/bin/bash
