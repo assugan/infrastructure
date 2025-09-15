@@ -7,23 +7,24 @@ pipeline {
     TELEGRAM_BOT_TOKEN = credentials('telegram-bot-token')
     TELEGRAM_CHAT_ID   = credentials('telegram-chat-id')
 
-    # ИМЯ KeyPair в AWS (используем в var.ssh_key_name)
+    // Имя существующей AWS KeyPair (String credential в Jenkins с ID: ec2-ssh-key)
     SSH_KEY_NAME       = credentials('ec2-ssh-key')
   }
   options { timestamps() }
 
   stages {
-    stage('Checkout') { steps { checkout scm } }
-
-    stage('Terraform Init') {
+    stage('Checkout') {
       steps {
-        dir('main') {
-          sh 'terraform init -upgrade'
-        }
+        echo "Branch: ${env.BRANCH_NAME}"
+        checkout scm
       }
     }
 
-    stage('Validate & Plan') {
+    stage('Terraform Init') {
+      steps { dir('main') { sh 'terraform init -upgrade' } }
+    }
+
+    stage('Validate & Plan (all branches)') {
       steps {
         dir('main') {
           sh 'terraform fmt -check'
@@ -36,33 +37,30 @@ pipeline {
         }
       }
       post {
-        success { script { sendTelegram("✅ [${env.JOB_NAME}] plan OK (#${env.BUILD_NUMBER})") } }
-        failure { script { sendTelegram("❌ [${env.JOB_NAME}] plan FAILED (#${env.BUILD_NUMBER})") } }
+        success { script { notify("✅ [${env.JOB_NAME}] plan OK on ${env.BRANCH_NAME} (#${env.BUILD_NUMBER})") } }
+        failure { script { notify("❌ [${env.JOB_NAME}] plan FAILED on ${env.BRANCH_NAME} (#${env.BUILD_NUMBER})") } }
       }
     }
 
-    stage('Manual Approval (only on main)') {
-      when { allOf { branch 'main' } }
-      steps {
-        input message: 'Apply infrastructure?', ok: 'Apply'
-      }
+    // Только в main просим подтверждение:
+    stage('Manual Approval (main only)') {
+      when { branch 'main' }
+      steps { input message: 'Apply infrastructure?', ok: 'Apply' }
     }
 
-    stage('Apply (only on main)') {
-      when { allOf { branch 'main' } }
-      steps {
-        dir('main') {
-          sh 'terraform apply -auto-approve tfplan'
-        }
-      }
+    // Применяем только из main:
+    stage('Apply (main only)') {
+      when { branch 'main' }
+      steps { dir('main') { sh 'terraform apply -auto-approve tfplan' } }
       post {
-        success { script { sendTelegram("🚀 [${env.JOB_NAME}] apply DONE (#${env.BUILD_NUMBER})") } }
-        failure { script { sendTelegram("🔥 [${env.JOB_NAME}] apply FAILED (#${env.BUILD_NUMBER})") } }
+        success { script { notify("🚀 [${env.JOB_NAME}] apply DONE on main (#${env.BUILD_NUMBER})") } }
+        failure { script { notify("🔥 [${env.JOB_NAME}] apply FAILED on main (#${env.BUILD_NUMBER})") } }
       }
     }
 
-    stage('Ansible Configure (only on main)') {
-      when { allOf { branch 'main' } }
+    // Конфигурация хоста — тоже только в main:
+    stage('Ansible Configure (main only)') {
+      when { branch 'main' }
       steps {
         dir('main') {
           script {
@@ -76,16 +74,16 @@ pipeline {
         }
       }
       post {
-        success { script { sendTelegram("🔧 [${env.JOB_NAME}] ansible DONE") } }
-        failure { script { sendTelegram("🛑 [${env.JOB_NAME}] ansible FAILED") } }
+        success { script { notify("🔧 [${env.JOB_NAME}] ansible DONE on main") } }
+        failure { script { notify("🛑 [${env.JOB_NAME}] ansible FAILED on main") } }
       }
     }
   }
 }
 
-def sendTelegram(String msg) {
+def notify(String msg) {
   sh """
     curl -s -X POST https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage \
-      -d chat_id=${TELEGRAM_CHAT_ID} -d text="$(echo "${msg}" | sed 's/"/\\\\"/g')"
+      -d chat_id=${TELEGRAM_CHAT_ID} -d text="$(echo "${msg}" | sed 's/"/\\\\\\"/g')"
   """
 }
