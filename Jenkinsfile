@@ -1,3 +1,7 @@
+// Jenkinsfile — INFRA (single env). Ветки:
+//   draft-infra => только plan
+//   main        => plan -> manual approve -> apply -> ansible
+
 pipeline {
   agent any
 
@@ -5,11 +9,19 @@ pipeline {
     AWS_DEFAULT_REGION = 'eu-central-1'
     TF_IN_AUTOMATION   = 'true'
 
+    // где лежит Terraform и Ansible:
+    TF_DIR      = 'infrastructure/main_infra'
+    ANSIBLE_DIR = 'infrastructure/ansible'
+
+    // Telegram creds (Secret text)
     TELEGRAM_BOT_TOKEN = credentials('telegram-bot-token')
     TELEGRAM_CHAT_ID   = credentials('telegram-chat-id')
 
-    // String credential: ИМЯ AWS KeyPair
-    SSH_KEY_NAME       = credentials('ec2-ssh-key')
+    // Имя AWS KeyPair (String credential) — нужно Terraform’у
+    SSH_KEY_NAME = credentials('ec2-ssh-key')
+
+    // Кэш провайдеров — быстрее init на macOS
+    TF_PLUGIN_CACHE_DIR = "${WORKSPACE}/.terraform.d/plugin-cache"
   }
 
   options { timestamps() }
@@ -22,79 +34,21 @@ pipeline {
       }
     }
 
-    stage('Debug Repo Layout') {
-      steps {
-        sh '''
-          echo "=== WORKSPACE ==="
-          pwd
-          echo "=== TREE ==="
-          ls -la
-          echo "=== .tf files (first 2 levels) ==="
-          find . -maxdepth 2 -name "*.tf" -print || true
-        '''
-      }
-    }
-
-    stage('Detect Terraform directory') {
-      steps {
-        script {
-          // ищем где лежат *.tf: сначала main/, потом infra/, потом корень
-          def guess = sh(
-            script: '''
-              set -e
-              for d in main infra .; do
-                if [ -d "$d" ] && ls -1 "$d"/*.tf >/dev/null 2>&1; then
-                  echo "$d"
-                  exit 0
-                fi
-              done
-              # если не нашли — попробуем найти первый каталог с .tf на глубине 2
-              dir=$(dirname "$(find . -maxdepth 2 -name "*.tf" -print | head -n1)") || true
-              if [ -n "$dir" ]; then
-                echo "$dir"
-                exit 0
-              fi
-              exit 1
-            ''',
-            returnStatus: true
-          ) == 0 ? sh(script: 'echo "$?" >/dev/null; ', returnStdout: true) : null
-
-          // Увы, принять stdout из пред. шага нельзя — сделаем отдельно, чтобы получить сам путь:
-          def tfDir = sh(
-            script: '''
-              set -e
-              for d in main infra .; do
-                if [ -d "$d" ] && ls -1 "$d"/*.tf >/dev/null 2>&1; then
-                  echo "$d"
-                  exit 0
-                fi
-              done
-              dir=$(dirname "$(find . -maxdepth 2 -name "*.tf" -print | head -n1)") || true
-              [ -n "$dir" ] && echo "$dir" || true
-            ''',
-            returnStdout: true
-          ).trim()
-
-          if (!tfDir) {
-            error "Не найден каталог с Terraform (.tf). Проверь структуру репозитория."
-          }
-          echo "Terraform directory detected: ${tfDir}"
-          env.TF_DIR = tfDir
-        }
-      }
-    }
-
     stage('Terraform Init') {
       steps {
         dir("${env.TF_DIR}") {
           script {
             def TF = tool name: 'terraform-1.6.6'
-            withEnv(["TF_BIN=${TF}/terraform"]) {
+            withEnv(["TF_BIN=${TF}/terraform", "TF_PLUGIN_CACHE_DIR=${env.TF_PLUGIN_CACHE_DIR}"]) {
               sh '''
+                mkdir -p "$TF_PLUGIN_CACHE_DIR"
                 "$TF_BIN" -version
-                pwd
-                ls -la
                 "$TF_BIN" init -upgrade
+                # macOS: иногда провайдеры в quarantine — снимем на всякий
+                if command -v xattr >/dev/null 2>&1; then
+                  xattr -dr com.apple.quarantine .terraform || true
+                fi
+                chmod -R +x .terraform || true
               '''
             }
           }
@@ -107,15 +61,18 @@ pipeline {
         dir("${env.TF_DIR}") {
           script {
             def TF = tool name: 'terraform-1.6.6'
-            // безопасно передаём секрет как TF_VAR_*, чтобы избежать Groovy interpolation warning и утечек
-            withEnv(["TF_BIN=${TF}/terraform"]) {
+            withEnv([
+              "TF_BIN=${TF}/terraform",
+              "TF_PLUGIN_CACHE_DIR=${env.TF_PLUGIN_CACHE_DIR}",
+              // безопасно прокидываем имя KeyPair
+              "TF_VAR_ssh_key_name=${SSH_KEY_NAME}"
+            ]) {
               sh '''
-                # мягкий fmt: если есть несоответствия — сначала покажем diff,
-                # затем автоматически форматнём и продолжим
+                # fmt: если есть несоответствия — автоисправим, но не валим сборку
                 set +e
                 "$TF_BIN" fmt -check -recursive
-                status=$?
-                if [ $status -ne 0 ]; then
+                st=$?
+                if [ $st -ne 0 ]; then
                   echo "⚠️ terraform fmt нашёл несоответствия. Автоформатирую..."
                   "$TF_BIN" fmt -recursive
                 fi
@@ -145,10 +102,8 @@ pipeline {
         dir("${env.TF_DIR}") {
           script {
             def TF = tool name: 'terraform-1.6.6'
-            withEnv(["TF_BIN=${TF}/terraform"]) {
-              sh '''
-                "$TF_BIN" apply -auto-approve tfplan
-              '''
+            withEnv(["TF_BIN=${TF}/terraform", "TF_PLUGIN_CACHE_DIR=${env.TF_PLUGIN_CACHE_DIR}"]) {
+              sh '"$TF_BIN" apply -auto-approve tfplan'
             }
           }
         }
@@ -162,18 +117,33 @@ pipeline {
     stage('Ansible Configure (main only)') {
       when { branch 'main' }
       steps {
+        // 1) достаём IP из Terraform outputs
         dir("${env.TF_DIR}") {
           script {
             def TF = tool name: 'terraform-1.6.6'
-            def IP = sh(script: "\"${TF}/terraform\" output -raw public_ip", returnStdout: true).trim()
-            writeFile file: 'inventory', text: "${IP}\n"
-            echo "Inventory generated with host: ${IP}"
+            env.APP_IP = sh(script: "\"${TF}/terraform\" output -raw public_ip", returnStdout: true).trim()
+            echo "EC2 public IP: ${env.APP_IP}"
           }
         }
-        // На агенте должен быть установлен ansible; если нет — скажи, дам контейнерный вариант
-        dir('ansible') {
-          sh 'ANSIBLE_HOST_KEY_CHECKING=false ansible -i ../${TF_DIR}/inventory all -m ping -u ubuntu || true'
-          sh 'ANSIBLE_HOST_KEY_CHECKING=false ansible-playbook -i ../${TF_DIR}/inventory site.yml -u ubuntu'
+
+        // 2) формируем inventory для Ansible рядом с playbook
+        dir("${env.ANSIBLE_DIR}") {
+          script {
+            def inv = "[web]\n${env.APP_IP}\n"
+            writeFile file: 'inventory.ini', text: inv
+            echo "Inventory written to ${env.ANSIBLE_DIR}/inventory.ini"
+          }
+        }
+
+        // 3) запускаем Ansible c SSH-ключом из Jenkins credentials
+        // Создай credential типа "SSH Username with private key" с ID: ec2-ssh-private, username: ubuntu
+        withCredentials([sshUserPrivateKey(credentialsId: 'ec2-ssh-private', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USER')]) {
+          dir("${env.ANSIBLE_DIR}") {
+            sh '''
+              ANSIBLE_HOST_KEY_CHECKING=false ansible -i inventory.ini web -m ping -u "$SSH_USER" --private-key "$SSH_KEY_FILE" || true
+              ANSIBLE_HOST_KEY_CHECKING=false ansible-playbook -i inventory.ini site.yml -u "$SSH_USER" --private-key "$SSH_KEY_FILE"
+            '''
+          }
         }
       }
       post {
@@ -184,6 +154,7 @@ pipeline {
   }
 }
 
+// Телеграм без Groovy-интерполяции
 def notifyTG(String message) {
   withEnv(["MSG=${message}"]) {
     sh '''#!/bin/bash
