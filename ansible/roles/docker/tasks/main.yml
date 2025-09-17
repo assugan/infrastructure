@@ -1,16 +1,27 @@
 ---
 - name: Install base deps
   apt:
-    name: [apt-transport-https, ca-certificates, curl, gnupg, lsb-release, git]
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+      - git
     state: present
     update_cache: true
 
+- name: Create keyrings dir
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
 - name: Add Docker GPG key
-  shell: |
-    install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-    chmod a+r /etc/apt/keyrings/docker.asc
-  args: { creates: /etc/apt/keyrings/docker.asc }
+  get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
 
 - name: Add Docker apt repo
   copy:
@@ -18,7 +29,7 @@
     content: |
       deb [arch={{ ansible_architecture }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
 
-- name: Install Docker Engine & compose plugin
+- name: Install Docker Engine & plugins
   apt:
     name:
       - docker-ce
@@ -28,6 +39,22 @@
       - docker-compose-plugin
     state: present
     update_cache: true
+
+- name: Ensure docker group exists
+  group:
+    name: docker
+    state: present
+
+- name: Add current user ({{ ansible_user_id }}) to docker group
+  user:
+    name: "{{ ansible_user_id }}"
+    groups: docker
+    append: true
+  when: ansible_user_id != "root"
+
+- name: Reload systemd
+  command: systemctl daemon-reload
+  become: true
 
 - name: Ensure docker is running
   service:

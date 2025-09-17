@@ -1,0 +1,12 @@
+- hosts: web
+  become: true
+  vars:
+    app_domain: "assugan.click"
+    image_repo: "docker.io/assugan/web-app"
+    image_tag: "latest"
+    web1_port: 8081
+    web2_port: 8082
+  roles:
+    - docker
+    - app_container
+    - nginx_lb

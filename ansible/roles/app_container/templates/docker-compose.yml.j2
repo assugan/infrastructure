@@ -2,17 +2,14 @@ version: "3.8"
 
 services:
   web1:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: "{{ image_repo }}:{{ image_tag }}"
     container_name: web1
     restart: unless-stopped
     ports:
       - "127.0.0.1:{{ web1_port }}:80"
 
   web2:
-    build:
-      context: .
+    image: "{{ image_repo }}:{{ image_tag }}"
     container_name: web2
     restart: unless-stopped
     ports:
