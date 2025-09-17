@@ -1,0 +1,20 @@
+---
+- name: Create app dir
+  file:
+    path: /opt/app/simple_web_page
+    state: directory
+    mode: "0755"
+
+- name: Render docker-compose.yml (2 replicas)
+  template:
+    src: docker-compose.yml.j2
+    dest: /opt/app/simple_web_page/docker-compose.yml
+    mode: "0644"
+
+- name: Pull images
+  command: docker compose -f /opt/app/simple_web_page/docker-compose.yml pull
+  register: pull_res
+  changed_when: "'Downloaded newer image' in pull_res.stdout"
+
+- name: Up containers
+  command: docker compose -f /opt/app/simple_web_page/docker-compose.yml up -d
