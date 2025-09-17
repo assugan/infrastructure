@@ -1,5 +1,5 @@
 resource "aws_security_group" "web" {
-  name        = "sg-web-single"
+  name        = "web-single-"
   description = "Allow SSH/HTTP/HTTPS"
   vpc_id      = data.aws_vpc.default.id
 
@@ -29,6 +29,6 @@ resource "aws_security_group" "web" {
     cidr_blocks = ["0.0.0.0/0"]
   }
   tags = {
-    Name = "sg-web-${sg-web-single}"
+    Name = "sg-web-single"
   }
 }

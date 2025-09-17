@@ -1,0 +1,28 @@
+---
+- name: Ensure app root
+  file:
+    path: "{{ app_root }}"
+    state: directory
+    mode: "0755"
+
+- name: Checkout app repo
+  git:
+    repo: "{{ app_repo_url }}"
+    dest: "{{ app_root }}"
+    version: "{{ app_git_ref }}"
+    force: true
+
+- name: Render docker-compose.yml (2 containers)
+  template:
+    src: docker-compose.yml.j2
+    dest: "{{ app_root }}/docker-compose.yml"
+    mode: "0644"
+
+- name: Build & run containers (web1, web2)
+  command: docker compose -f {{ app_root }}/docker-compose.yml up -d --build
+  register: compose_up
+  changed_when: "'Creating' in compose_up.stdout or 'Recreating' in compose_up.stdout or 'Building' in compose_up.stdout"
+
+- name: Show running containers
+  command: docker ps --format "table {{'{{'}}.Names{{'}}'}}\t{{'{{'}}.Image{{'}}'}}\t{{'{{'}}.Ports{{'}}'}}"
+  changed_when: false

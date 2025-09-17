@@ -1,0 +1,13 @@
+- hosts: web
+  become: true
+  vars:
+    app_domain: "assugan.click"
+    app_repo_url: "https://github.com/assugan/simple_web_page.git"
+    app_git_ref: "main"                  # Jenkins переопределит текущей веткой
+    app_root: "/opt/app/simple_web_page" # где лежат Dockerfile/compose и код
+    web1_port: 8081
+    web2_port: 8082
+  roles:
+    - docker
+    - app_container
+    - nginx_lb
