@@ -18,4 +18,3 @@
 
 - name: Up containers
   command: docker compose -f /opt/app/simple_web_page/docker-compose.yml up -d
-
