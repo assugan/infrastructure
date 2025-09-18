@@ -11,6 +11,14 @@
     state: present
     update_cache: true
 
+- name: Map Docker arch
+  set_fact:
+    docker_repo_arch: >-
+      {{ 'amd64' if ansible_architecture in ['x86_64'] else
+         'arm64' if ansible_architecture in ['aarch64'] else
+         'armhf' if ansible_architecture in ['armv7l'] else
+         ansible_architecture }}
+
 - name: Create keyrings dir
   file:
     path: /etc/apt/keyrings
@@ -23,11 +31,24 @@
     dest: /etc/apt/keyrings/docker.asc
     mode: "0644"
 
-- name: Add Docker apt repo
+- name: Dearmor Docker GPG into keyring
+  command: >
+    gpg --dearmor --yes
+    --output /etc/apt/keyrings/docker.gpg
+    /etc/apt/keyrings/docker.asc
+  args:
+    creates: /etc/apt/keyrings/docker.gpg
+
+- name: Set permissions on keyring
+  file:
+    path: /etc/apt/keyrings/docker.gpg
+    mode: "0644"
+
+- name: Add Docker apt repo (stable)
   copy:
     dest: /etc/apt/sources.list.d/docker.list
     content: |
-      deb [arch={{ ansible_architecture }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+      deb [arch={{ docker_repo_arch }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
 
 - name: Install Docker Engine & plugins
   apt:
