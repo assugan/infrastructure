@@ -34,3 +34,4 @@
   service:
     name: nginx
     state: reloaded
+
