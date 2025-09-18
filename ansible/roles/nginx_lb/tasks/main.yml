@@ -30,7 +30,7 @@
   command: nginx -t
   changed_when: false
 
-- name: Reload nginx
+- name: reload nginx
   service:
     name: nginx
     state: reloaded
