@@ -11,3 +11,4 @@
     - docker
     - app_container
     - nginx_lb
+    - monitoring
