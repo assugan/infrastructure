@@ -38,7 +38,7 @@
         - job_name: 'blackbox_http'
           metrics_path: /probe
           params:
-            module: [http_2xx]        # 2xx — успех
+            module: [http_2xx]
           static_configs:
             - targets:
                 - "https://{{ app_domain }}"
@@ -76,6 +76,7 @@
         http_listen_port: 3100
       common:
         path_prefix: /loki
+        replication_factor: 1
         ring:
           instance_addr: 127.0.0.1
           kvstore:
@@ -167,7 +168,6 @@
     dest: /opt/monitoring/docker-compose.yml
     mode: "0644"
     content: |
-      version: "3.9"
       services:
         prometheus:
           image: prom/prometheus:v2.55.0
@@ -176,20 +176,24 @@
           volumes:
             - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
           ports:
-            - "127.0.0.1:9090:9090"     # локальный доступ (SSH-туннель)
+            - "127.0.0.1:9090:9090"
           depends_on:
             - node-exporter
             - blackbox-exporter
+            - cadvisor
           restart: unless-stopped
 
         node-exporter:
           image: prom/node-exporter:v1.8.2
           command:
-            - '--path.rootfs=/host'
-          pid: host
-          network_mode: host
+            - '--path.procfs=/host/proc'
+            - '--path.sysfs=/host/sys'
+            - '--path.rootfs=/rootfs'
+            - '--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+)($|/)'
           volumes:
-            - /:/host:ro,rslave
+            - /proc:/host/proc:ro
+            - /sys:/host/sys:ro
+            - /:/rootfs:ro
           restart: unless-stopped
 
         cadvisor:
@@ -201,7 +205,7 @@
             - /sys:/sys:ro
             - /var/lib/docker/:/var/lib/docker:ro
           ports:
-            - "127.0.0.1:8080:8080"     # локально
+            - "127.0.0.1:8080:8080"
           restart: unless-stopped
 
         blackbox-exporter:
@@ -211,7 +215,7 @@
           volumes:
             - ./blackbox.yml:/etc/blackbox/blackbox.yml:ro
           ports:
-            - "127.0.0.1:9115:9115"     # локально
+            - "127.0.0.1:9115:9115"
           restart: unless-stopped
 
         loki:
@@ -222,7 +226,7 @@
             - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
             - ./loki:/loki
           ports:
-            - "127.0.0.1:3100:3100"     # локально
+            - "127.0.0.1:3100:3100"
           restart: unless-stopped
 
         promtail:
@@ -245,7 +249,7 @@
             - ./grafana/provisioning:/etc/grafana/provisioning
             - grafana-data:/var/lib/grafana
           ports:
-            - "127.0.0.1:3000:3000"     # локально
+            - "127.0.0.1:3000:3000"
           depends_on:
             - prometheus
             - loki
@@ -254,14 +258,12 @@
       volumes:
         grafana-data: {}
 
-- name: Up monitoring stack
+- name: Up monitoring stack (always apply latest)
   shell: |
     docker compose -f /opt/monitoring/docker-compose.yml pull
     docker compose -f /opt/monitoring/docker-compose.yml up -d
-  args:
-    creates: /opt/monitoring/.deployed
 
-- name: Mark deployed
+- name: Mark deployed (marker file, но не блокирует апдейты)
   file:
     path: /opt/monitoring/.deployed
     state: touch
