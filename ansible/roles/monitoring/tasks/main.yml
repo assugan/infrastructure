@@ -289,10 +289,14 @@
       volumes:
         grafana-data: {}
 
-- name: Up monitoring stack (always apply latest)
+- name: Up monitoring stack (force recreate everything)
+  args:
+    chdir: /opt/monitoring
   shell: |
-    docker compose -f /opt/monitoring/docker-compose.yml pull
-    docker compose -f /opt/monitoring/docker-compose.yml up -d
+    docker compose -f /opt/monitoring/docker-compose.yml up -d \
+      --pull always \
+      --force-recreate \
+      --remove-orphans
 
 - name: Mark deployed (marker file, но не блокирует апдейты)
   file:
