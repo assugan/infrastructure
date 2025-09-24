@@ -14,6 +14,20 @@
     - /opt/monitoring/loki
     - /opt/monitoring/promtail
 
+- name: Ensure Loki subdirs exist
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /opt/monitoring/loki/chunks
+    - /opt/monitoring/loki/index
+    - /opt/monitoring/loki/boltdb-cache
+    - /opt/monitoring/loki/compactor
+    - /opt/monitoring/loki/rules
+
 - name: Drop Prometheus config
   copy:
     dest: /opt/monitoring/prometheus/prometheus.yml
@@ -76,6 +90,7 @@
       server:
         http_listen_port: 3100
 
+      # Односерверный ring
       ingester:
         lifecycler:
           ring:
@@ -84,6 +99,12 @@
             replication_factor: 1
         chunk_idle_period: 3m
         chunk_retain_period: 1m
+
+      # ВАЖНО: compactor должен знать свой рабочий каталог и стор
+      compactor:
+        working_directory: /loki/compactor
+        shared_store: filesystem
+        compaction_interval: 5m
 
       schema_config:
         configs:
@@ -122,7 +143,6 @@
           local:
             directory: /loki/rules
         rule_path: /tmp/loki/rules
-        alertmanager_url: http://localhost:9093
         ring:
           kvstore:
             store: inmemory
