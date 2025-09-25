@@ -79,13 +79,13 @@
             - target_label: __address__
               replacement: blackbox-exporter:9115
 
-        rule_files:
-          - /etc/prometheus/alert_rules.yml
+      rule_files:
+        - /etc/prometheus/alert_rules.yml
 
-        alerting:
-          alertmanagers:
-            - static_configs:
-                - targets: ['alertmanager:9093']
+      alerting:
+        alertmanagers:
+          - static_configs:
+              - targets: ['alertmanager:9093']
 
 - name: Drop Prometheus alert rules
   copy:
