@@ -295,16 +295,18 @@
       receivers:
         - name: 'telegram'
           telegram_configs:
-            - bot_token: '{{ telegram_bot_token }}'
-              chat_id: '{{ telegram_chat_id }}'
-              api_url: 'https://api.telegram.org'
-              parse_mode: 'HTML'
-              message: |
-                <b>{{`{{`}} .Status | toUpper {{`}}`}}</b> {{`{{`}} .CommonLabels.alertname {{`}}`}}
-                {{`{{`}} range .Alerts {{`}}`}}
-                • <b>{{`{{`}} .Labels.severity {{`}}`}}</b> — {{`{{`}} .Annotations.summary {{`}}`}}
-                  {{`{{`}} .Annotations.description {{`}}`}}
-                {{`{{`}} end {{`}}`}}
+            - bot_token: "{{ telegram_bot_token }}"
+              chat_id: "{{ telegram_chat_id }}"
+              api_url: "https://api.telegram.org"
+              parse_mode: "HTML"
+              message: |-
+                {% raw %}
+                <b>{{ .Status | toUpper }}</b> {{ .CommonLabels.alertname }}
+                {{ range .Alerts }}
+                • <b>{{ .Labels.severity }}</b> — {{ .Annotations.summary }}
+                  {{ .Annotations.description }}
+                {{ end }}
+                {% endraw %}
 
 - name: Drop monitoring docker-compose
   copy:
