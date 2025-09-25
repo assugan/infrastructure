@@ -410,6 +410,7 @@
 
       volumes:
         grafana-data: {}
+        prometheus-data: {}
 
 - name: Up monitoring stack (force recreate everything)
   args:
