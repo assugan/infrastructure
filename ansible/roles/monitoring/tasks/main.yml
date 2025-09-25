@@ -9,10 +9,12 @@
   loop:
     - /opt/monitoring
     - /opt/monitoring/prometheus
+    - /opt/monitoring/prometheus/rules 
     - /opt/monitoring/grafana/provisioning/datasources
     - /opt/monitoring/grafana/provisioning/dashboards
     - /opt/monitoring/loki
     - /opt/monitoring/promtail
+    - /opt/monitoring/alertmanager
 
 - name: Ensure Loki subdirs exist
   file:
@@ -28,6 +30,14 @@
     - /opt/monitoring/loki/compactor
     - /opt/monitoring/loki/rules
 
+- name: Create alertmanager dir
+  file:
+    path: /opt/monitoring/alertmanager
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Drop Prometheus config
   copy:
     dest: /opt/monitoring/prometheus/prometheus.yml
@@ -37,18 +47,23 @@
         scrape_interval: 15s
         evaluation_interval: 15s
 
+      alerting:
+        alertmanagers:
+          - static_configs:
+              - targets: ['alertmanager:9093']
+
+      rule_files:
+        - /etc/prometheus/rules/*.yml
+
       scrape_configs:
-        # node_exporter (CPU/load/mem/disk)
         - job_name: 'node'
           static_configs:
             - targets: ['node-exporter:9100']
 
-        # cAdvisor (контейнеры)
         - job_name: 'cadvisor'
           static_configs:
             - targets: ['cadvisor:8080']
 
-        # blackbox_exporter (HTTP availability/RTT)
         - job_name: 'blackbox_http'
           metrics_path: /probe
           params:
@@ -63,6 +78,64 @@
               target_label: instance
             - target_label: __address__
               replacement: blackbox-exporter:9115
+
+        rule_files:
+          - /etc/prometheus/alert_rules.yml
+
+        alerting:
+          alertmanagers:
+            - static_configs:
+                - targets: ['alertmanager:9093']
+
+- name: Drop Prometheus alert rules
+  copy:
+    dest: /opt/monitoring/prometheus/alert_rules.yml
+    mode: "0644"
+    content: |
+      groups:
+        - name: uptime_http
+          rules:
+            - alert: SiteDown
+              expr: probe_success{instance="https://{{ app_domain }}"} == 0
+              for: 1m
+              labels: { severity: critical }
+              annotations:
+                summary: "Site {{ app_domain }} is down"
+                description: "Blackbox probe failed for {{ app_domain }}"
+
+            - alert: SlowHTTP
+              expr: probe_duration_seconds{instance="https://{{ app_domain }}"} > 0.5
+              for: 5m
+              labels: { severity: warning }
+              annotations:
+                summary: "Slow HTTP for {{ app_domain }}"
+                description: "p95 probe_duration_seconds > 0.5s"
+
+        - name: host_health
+          rules:
+            - alert: HighCPU
+              expr: avg(rate(node_cpu_seconds_total{mode!="idle"}[5m])) > 0.7
+              for: 10m
+              labels: { severity: warning }
+              annotations:
+                summary: "High CPU on node"
+                description: "5m avg CPU > 70%"
+
+            - alert: LowMemory
+              expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.1
+              for: 10m
+              labels: { severity: warning }
+              annotations:
+                summary: "Low memory"
+                description: "Available RAM < 10%"
+
+            - alert: LowDiskRoot
+              expr: node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} < 5e+9
+              for: 10m
+              labels: { severity: warning }
+              annotations:
+                summary: "Low disk space on /"
+                description: "Free space on / < 5 GB"
 
 - name: Drop blackbox config
   copy:
@@ -207,6 +280,32 @@
           url: http://loki:3100
           isDefault: false
 
+- name: Drop Alertmanager config (Telegram)
+  copy:
+    dest: /opt/monitoring/alertmanager/alertmanager.yml
+    mode: "0644"
+    content: |
+      route:
+        receiver: 'telegram'
+        group_by: ['alertname']
+        group_wait: 10s
+        group_interval: 1m
+        repeat_interval: 2h
+
+      receivers:
+        - name: 'telegram'
+          telegram_configs:
+            - bot_token: '{{ telegram_bot_token }}'
+              chat_id: '{{ telegram_chat_id }}'
+              api_url: 'https://api.telegram.org'
+              parse_mode: 'HTML'
+              message: |
+                <b>{{`{{`}} .Status | toUpper {{`}}`}}</b> {{`{{`}} .CommonLabels.alertname {{`}}`}}
+                {{`{{`}} range .Alerts {{`}}`}}
+                • <b>{{`{{`}} .Labels.severity {{`}}`}}</b> — {{`{{`}} .Annotations.summary {{`}}`}}
+                  {{`{{`}} .Annotations.description {{`}}`}}
+                {{`{{`}} end {{`}}`}}
+
 - name: Drop monitoring docker-compose
   copy:
     dest: /opt/monitoring/docker-compose.yml
@@ -217,14 +316,22 @@
           image: prom/prometheus:v2.55.0
           command:
             - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.retention.time=15d
           volumes:
             - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-          ports:
-            - "127.0.0.1:9090:9090"
-          depends_on:
-            - node-exporter
-            - blackbox-exporter
-            - cadvisor
+            - ./prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+            - prometheus-data:/prometheus
+          ports: ["127.0.0.1:9090:9090"]
+          depends_on: [node-exporter, blackbox-exporter, alertmanager]
+          restart: unless-stopped
+
+        alertmanager:
+          image: prom/alertmanager:v0.27.0
+          command:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+          volumes:
+            - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+          ports: ["127.0.0.1:9093:9093"]
           restart: unless-stopped
 
         node-exporter:
@@ -287,7 +394,7 @@
           image: grafana/grafana:11.2.0
           environment:
             GF_SECURITY_ADMIN_USER: admin
-            GF_SECURITY_ADMIN_PASSWORD: admin
+            GF_SECURITY_ADMIN_PASSWORD: "{{ grafana_admin_password | default('admin') }}"
             GF_PATHS_PROVISIONING: /etc/grafana/provisioning
           volumes:
             - ./grafana/provisioning:/etc/grafana/provisioning
@@ -311,6 +418,39 @@
     docker compose -f docker-compose.yml up -d \
       --force-recreate \
       --remove-orphans
+
+- name: Wait Grafana is listening on 3000
+  wait_for:
+    host: 127.0.0.1
+    port: 3000
+    timeout: 90
+
+- name: Check Grafana login with provided password
+  uri:
+    url: http://127.0.0.1:3000/api/login/ping
+    method: GET
+    force_basic_auth: true
+    url_username: admin
+    url_password: "{{ grafana_admin_password }}"
+    status_code: [200, 401]
+    return_content: false
+  register: grafana_ping
+  no_log: true
+
+- name: Decide if password reset is needed
+  set_fact:
+    grafana_need_reset: "{{ grafana_ping.status != 200 }}"
+
+- name: Reset Grafana admin password (only if needed)
+  shell: |
+    docker exec monitoring-grafana-1 grafana cli admin reset-admin-password '{{ grafana_admin_password }}'
+  when: grafana_need_reset | bool
+  register: grafana_pw
+  changed_when: "'Admin password changed successfully' in grafana_pw.stdout"
+  failed_when: >
+    grafana_pw.rc != 0 and
+    ('Admin password changed successfully' not in grafana_pw.stdout)
+  no_log: true
 
 - name: Mark deployed (marker file, но не блокирует апдейты)
   file:
