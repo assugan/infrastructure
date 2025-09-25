@@ -12,6 +12,7 @@
     - /opt/monitoring/prometheus/rules 
     - /opt/monitoring/grafana/provisioning/datasources
     - /opt/monitoring/grafana/provisioning/dashboards
+    - /opt/monitoring/grafana/dashboards
     - /opt/monitoring/loki
     - /opt/monitoring/promtail
     - /opt/monitoring/alertmanager
@@ -273,6 +274,41 @@
           url: http://loki:3100
           isDefault: false
 
+- name: Provision Grafana dashboard provider
+  copy:
+    dest: /opt/monitoring/grafana/provisioning/dashboards/provider.yml
+    mode: "0644"
+    content: |
+      apiVersion: 1
+      providers:
+        - name: 'default'
+          orgId: 1
+          folder: ''
+          type: file
+          disableDeletion: false
+          updateIntervalSeconds: 30
+          options:
+            path: /var/lib/grafana/dashboards
+            foldersFromFilesStructure: true
+
+- name: Download Grafana dashboard - Node Exporter (ID 1860)
+  get_url:
+    url: https://grafana.com/api/dashboards/1860/revisions/latest/download
+    dest: /opt/monitoring/grafana/dashboards/node-exporter.json
+    mode: "0644"
+
+- name: Download Grafana dashboard - Blackbox Exporter (ID 7587)
+  get_url:
+    url: https://grafana.com/api/dashboards/7587/revisions/latest/download
+    dest: /opt/monitoring/grafana/dashboards/blackbox-exporter.json
+    mode: "0644"
+
+- name: Download Grafana dashboard - cAdvisor (ID 193)
+  get_url:
+    url: https://grafana.com/api/dashboards/193/revisions/latest/download
+    dest: /opt/monitoring/grafana/dashboards/cadvisor.json
+    mode: "0644"
+
 - name: Drop Alertmanager config (Telegram)
   copy:
     dest: /opt/monitoring/alertmanager/alertmanager.yml
@@ -393,6 +429,7 @@
             GF_PATHS_PROVISIONING: /etc/grafana/provisioning
           volumes:
             - ./grafana/provisioning:/etc/grafana/provisioning
+            - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
             - grafana-data:/var/lib/grafana
           ports:
             - "127.0.0.1:3000:3000"
