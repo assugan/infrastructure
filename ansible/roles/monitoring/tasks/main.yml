@@ -63,19 +63,19 @@
           static_configs:
             - targets: ['node-exporter:9100']
 
-        # cAdvisor ->  'docker'
-        - job_name: 'docker'
+        # cAdvisor
+        - job_name: 'cadvisor'
           static_configs:
             - targets: ['cadvisor:8080']
 
-        # blackbox -> 'blackbox'
+        # blackbox
         - job_name: 'blackbox'
           metrics_path: /probe
           params:
             module: [http_2xx]
           static_configs:
             - targets:
-                - "https://{{ app_domain }}"
+                - "https://assugan.click"
           relabel_configs:
             - source_labels: [__address__]
               target_label: __param_target
