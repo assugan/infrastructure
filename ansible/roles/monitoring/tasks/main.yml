@@ -75,7 +75,7 @@
             module: [http_2xx]
           static_configs:
             - targets:
-                - "https://assugan.click"
+                - "https://{{ app_domain }}"
           relabel_configs:
             - source_labels: [__address__]
               target_label: __param_target
@@ -300,17 +300,86 @@
     dest: /opt/monitoring/grafana/dashboards/node-exporter.json
     mode: "0644"
 
-- name: Download Grafana dashboard - Blackbox Exporter (ID 7587)
-  get_url:
-    url: https://grafana.com/api/dashboards/7587/revisions/latest/download
-    dest: /opt/monitoring/grafana/dashboards/blackbox-exporter.json
+# === NEW: локальный дашборд для Blackbox, работает с job="blackbox" и instance=https://{{ app_domain }} ===
+- name: Drop Grafana dashboard (Blackbox local)
+  copy:
+    dest: /opt/monitoring/grafana/dashboards/blackbox-local.json
     mode: "0644"
+    content: |
+      {
+        "uid": "blackbox-local",
+        "title": "Blackbox — {{ app_domain }}",
+        "schemaVersion": 39,
+        "version": 1,
+        "time": { "from": "now-1h", "to": "now" },
+        "templating": {
+          "list": [
+            {
+              "name": "instance",
+              "label": "target",
+              "type": "query",
+              "datasource": "Prometheus",
+              "query": "label_values(probe_success{job=\"blackbox\"}, instance)",
+              "refresh": 2,
+              "current": { "selected": true, "text": "https://{{ app_domain }}", "value": "https://{{ app_domain }}" }
+            }
+          ]
+        },
+        "panels": [
+          { "type": "stat", "title": "Status",
+            "targets": [ { "expr": "max_over_time(probe_success{job=\"blackbox\",instance=\"$instance\"}[5m])" } ] },
+          { "type": "timeSeries", "title": "Probe duration (s)",
+            "targets": [ { "expr": "probe_duration_seconds{job=\"blackbox\",instance=\"$instance\"}" } ] },
+          { "type": "stat", "title": "HTTP Code",
+            "targets": [ { "expr": "probe_http_status_code{job=\"blackbox\",instance=\"$instance\"}" } ] },
+          { "type": "stat", "title": "SSL expiry (days)",
+            "targets": [ { "expr": "(probe_ssl_earliest_cert_expiry{job=\"blackbox\",instance=\"$instance\"} - time())/86400" } ] }
+        ]
+      }
 
-- name: Download Grafana dashboard - cAdvisor (ID 193)
-  get_url:
-    url: https://grafana.com/api/dashboards/193/revisions/latest/download
-    dest: /opt/monitoring/grafana/dashboards/cadvisor.json
+# === NEW: локальный дашборд для cAdvisor, работает с job="cadvisor" и label name=имя_контейнера ===
+- name: Drop Grafana dashboard (Docker / cAdvisor local)
+  copy:
+    dest: /opt/monitoring/grafana/dashboards/cadvisor-local.json
     mode: "0644"
+    content: |
+      {
+        "uid": "cadvisor-local",
+        "title": "Docker containers (cAdvisor)",
+        "schemaVersion": 39,
+        "version": 1,
+        "time": { "from": "now-1h", "to": "now" },
+        "templating": {
+          "list": [
+            {
+              "name": "container",
+              "label": "container",
+              "type": "query",
+              "datasource": "Prometheus",
+              "query": "label_values(container_last_seen{job=\"cadvisor\",image!=\"\"}, name)",
+              "refresh": 2,
+              "includeAll": true,
+              "multi": true,
+              "current": { "selected": true, "text": "All", "value": "$__all" }
+            }
+          ]
+        },
+        "panels": [
+          { "type": "timeSeries", "title": "CPU (cores) — rate",
+            "targets": [
+              { "expr": "sum by (name)(rate(container_cpu_usage_seconds_total{job=\"cadvisor\",image!=\"\",name=~\"$container\"}[5m]))" }
+            ] },
+          { "type": "timeSeries", "title": "Memory usage (bytes)",
+            "targets": [
+              { "expr": "sum by (name)(container_memory_usage_bytes{job=\"cadvisor\",image!=\"\",name=~\"$container\"})" }
+            ] },
+          { "type": "timeSeries", "title": "Network Rx / Tx (bytes/s)",
+            "targets": [
+              { "expr": "sum by (name)(rate(container_network_receive_bytes_total{job=\"cadvisor\",name=~\"$container\"}[5m]))", "legendFormat": "{{name}} rx" },
+              { "expr": "sum by (name)(rate(container_network_transmit_bytes_total{job=\"cadvisor\",name=~\"$container\"}[5m]))", "legendFormat": "{{name}} tx" }
+            ] }
+        ]
+      }
 
 - name: Drop Alertmanager config (Telegram)
   copy:
