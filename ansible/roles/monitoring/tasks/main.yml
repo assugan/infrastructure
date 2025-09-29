@@ -251,7 +251,7 @@
                 job: docker
                 __path__: /var/lib/docker/containers/*/*-json.log
 
-- name: Drop Grafana datasource for Prometheus
+- name: Drop Grafana datasource for Prometheus (fixed UID)
   copy:
     dest: /opt/monitoring/grafana/provisioning/datasources/prometheus.yml
     mode: "0644"
@@ -259,12 +259,13 @@
       apiVersion: 1
       datasources:
         - name: Prometheus
+          uid: prometheus
           type: prometheus
           access: proxy
           url: http://prometheus:9090
           isDefault: true
 
-- name: Drop Grafana datasource for Loki
+- name: Drop Grafana datasource for Loki (fixed UID)
   copy:
     dest: /opt/monitoring/grafana/provisioning/datasources/loki.yml
     mode: "0644"
@@ -272,6 +273,7 @@
       apiVersion: 1
       datasources:
         - name: Loki
+          uid: loki
           type: loki
           access: proxy
           url: http://loki:3100
@@ -300,95 +302,165 @@
     dest: /opt/monitoring/grafana/dashboards/node-exporter.json
     mode: "0644"
 
-# === NEW: локальный дашборд для Blackbox, работает с job="blackbox" и instance=https://{{ app_domain }} ===
-- name: Drop Grafana dashboard (Blackbox local)
+- name: Drop Grafana dashboard (Blackbox — mini, fixed types)
   copy:
     dest: /opt/monitoring/grafana/dashboards/blackbox-local.json
     mode: "0644"
-    content: |
+    content: |-
+      {% raw %}
       {
-        "uid": "blackbox-local",
         "title": "Blackbox — {{ app_domain }}",
+        "timezone": "browser",
         "schemaVersion": 39,
         "version": 1,
-        "time": { "from": "now-1h", "to": "now" },
+        "panels": [
+          {
+            "type": "stat",
+            "title": "Status",
+            "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
+            "targets": [
+              { "expr": "probe_success{job=\"blackbox\", instance=\"$target\"}", "datasource": {"type":"prometheus","uid":"prometheus"} }
+            ]
+          },
+          {
+            "type": "stat",
+            "title": "HTTP Code",
+            "gridPos": { "h": 6, "w": 8, "x": 8, "y": 0 },
+            "targets": [
+              { "expr": "probe_http_status_code{job=\"blackbox\", instance=\"$target\"}", "datasource": {"type":"prometheus","uid":"prometheus"} }
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "Probe duration (s)",
+            "gridPos": { "h": 8, "w": 16, "x": 0, "y": 6 },
+            "targets": [
+              { "expr": "avg(probe_duration_seconds{job=\"blackbox\", instance=\"$target\"})", "datasource": {"type":"prometheus","uid":"prometheus"} }
+            ]
+          },
+          {
+            "type": "stat",
+            "title": "SSL expiry (days)",
+            "gridPos": { "h": 6, "w": 16, "x": 0, "y": 14 },
+            "targets": [
+              { "expr": "(probe_ssl_earliest_cert_expiry{job=\"blackbox\", instance=\"$target\"} - time()) / 86400", "datasource": {"type":"prometheus","uid":"prometheus"} }
+            ]
+          }
+        ],
         "templating": {
           "list": [
             {
-              "name": "instance",
-              "label": "target",
+              "name": "target",
               "type": "query",
-              "datasource": "Prometheus",
+              "label": "target",
+              "datasource": {"type":"prometheus","uid":"prometheus"},
               "query": "label_values(probe_success{job=\"blackbox\"}, instance)",
               "refresh": 2,
-              "current": { "selected": true, "text": "https://{{ app_domain }}", "value": "https://{{ app_domain }}" }
+              "current": { "text": "https://{{ app_domain }}", "value": "https://{{ app_domain }}" }
             }
           ]
-        },
-        "panels": [
-          { "type": "stat", "title": "Status",
-            "targets": [ { "expr": "max_over_time(probe_success{job=\"blackbox\",instance=\"$instance\"}[5m])" } ] },
-          { "type": "timeSeries", "title": "Probe duration (s)",
-            "targets": [ { "expr": "probe_duration_seconds{job=\"blackbox\",instance=\"$instance\"}" } ] },
-          { "type": "stat", "title": "HTTP Code",
-            "targets": [ { "expr": "probe_http_status_code{job=\"blackbox\",instance=\"$instance\"}" } ] },
-          { "type": "stat", "title": "SSL expiry (days)",
-            "targets": [ { "expr": "(probe_ssl_earliest_cert_expiry{job=\"blackbox\",instance=\"$instance\"} - time())/86400" } ] }
-        ]
+        }
       }
+      {% endraw %}
 
-# === NEW: локальный дашборд для cAdvisor, работает с job="cadvisor" и label name=имя_контейнера ===
-# === FIX: локальный дашборд для cAdvisor, обернут в {% raw %}…{% endraw %} ===
-- name: Drop Grafana dashboard (Docker / cAdvisor local)
+- name: Drop Grafana dashboard (Docker / cAdvisor — mini)
   copy:
     dest: /opt/monitoring/grafana/dashboards/cadvisor-local.json
     mode: "0644"
     content: |-
       {% raw %}
       {
-        "uid": "cadvisor-local",
         "title": "Docker containers (cAdvisor)",
         "schemaVersion": 39,
         "version": 1,
-        "time": { "from": "now-1h", "to": "now" },
-        "templating": {
-          "list": [
-            {
-              "name": "container",
-              "label": "container",
-              "type": "query",
-              "datasource": "Prometheus",
-              "query": "label_values(container_last_seen{job=\"cadvisor\",image!=\"\"}, name)",
-              "refresh": 2,
-              "includeAll": true,
-              "multi": true,
-              "current": { "selected": true, "text": "All", "value": "$__all" }
-            }
-          ]
-        },
         "panels": [
           {
             "type": "timeseries",
             "title": "CPU (cores) — rate",
+            "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
             "targets": [
-              { "expr": "sum by (name)(rate(container_cpu_usage_seconds_total{job=\"cadvisor\",image!=\"\",name=~\"$container\"}[5m]))" }
+              { "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{job=\"cadvisor\", name=~\"$container\"}[5m]))", "legendFormat": "{{ name }}", "datasource": {"type":"prometheus","uid":"prometheus"} }
             ]
           },
           {
             "type": "timeseries",
             "title": "Memory usage (bytes)",
+            "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
             "targets": [
-              { "expr": "sum by (name)(container_memory_usage_bytes{job=\"cadvisor\",image!=\"\",name=~\"$container\"})" }
+              { "expr": "container_memory_usage_bytes{job=\"cadvisor\", name=~\"$container\"}", "legendFormat": "{{ name }}", "datasource": {"type":"prometheus","uid":"prometheus"} }
             ]
           },
           {
             "type": "timeseries",
             "title": "Network Rx / Tx (bytes/s)",
+            "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
             "targets": [
-              { "expr": "sum by (name)(rate(container_network_receive_bytes_total{job=\"cadvisor\",name=~\"$container\"}[5m]))", "legendFormat": "{{name}} rx" },
-              { "expr": "sum by (name)(rate(container_network_transmit_bytes_total{job=\"cadvisor\",name=~\"$container\"}[5m]))", "legendFormat": "{{name}} tx" }
+              { "expr": "sum by (name) (rate(container_network_receive_bytes_total{job=\"cadvisor\", name=~\"$container\"}[5m]))", "legendFormat": "{{ name }} rx", "datasource": {"type":"prometheus","uid":"prometheus"} },
+              { "expr": "sum by (name) (rate(container_network_transmit_bytes_total{job=\"cadvisor\", name=~\"$container\"}[5m]))", "legendFormat": "{{ name }} tx", "datasource": {"type":"prometheus","uid":"prometheus"} }
             ]
           }
+        ],
+        "templating": {
+          "list": [
+            {
+              "name": "container",
+              "type": "query",
+              "label": "container",
+              "datasource": {"type":"prometheus","uid":"prometheus"},
+              "query": "label_values(container_memory_usage_bytes{job=\"cadvisor\"}, name)",
+              "refresh": 2,
+              "multi": true,
+              "includeAll": true,
+              "current": { "text": "All", "value": "$__all" }
+            }
+          ]
+        }
+      }
+      {% endraw %}
+
+- name: Drop Grafana dashboard (Node mini)
+  copy:
+    dest: /opt/monitoring/grafana/dashboards/node-mini.json
+    mode: "0644"
+    content: |-
+      {% raw %}
+      {
+        "title": "Node Exporter — mini",
+        "schemaVersion": 39,
+        "version": 1,
+        "templating": {
+          "list": [
+            {
+              "name": "instance",
+              "type": "query",
+              "label": "Instance",
+              "datasource": {"type":"prometheus","uid":"prometheus"},
+              "query": "label_values(node_uname_info, instance)",
+              "refresh": 2,
+              "current": { "text": "node-exporter:9100", "value": "node-exporter:9100" }
+            }
+          ]
+        },
+        "panels": [
+          { "type": "stat", "title": "CPU Burst", "gridPos": {"h":6,"w":6,"x":0,"y":0},
+            "targets":[{"expr":"100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\", instance=\"$instance\"}[5m])) * 100)","datasource":{"type":"prometheus","uid":"prometheus"}}]},
+          { "type": "stat", "title": "Sys Load", "gridPos": {"h":6,"w":6,"x":6,"y":0},
+            "targets":[{"expr":"node_load1{instance=\"$instance\"}","datasource":{"type":"prometheus","uid":"prometheus"}}]},
+          { "type": "stat", "title": "RAM Used %", "gridPos": {"h":6,"w":6,"x":12,"y":0},
+            "targets":[{"expr":"(1 - (node_memory_MemAvailable_bytes{instance=\"$instance\"} / node_memory_MemTotal_bytes{instance=\"$instance\"})) * 100","datasource":{"type":"prometheus","uid":"prometheus"}}]},
+          { "type": "stat", "title": "Root FS Used %", "gridPos": {"h":6,"w":6,"x":18,"y":0},
+            "targets":[{"expr":"(1 - (node_filesystem_avail_bytes{mountpoint=\"/\",fstype!~\"tmpfs|overlay\",instance=\"$instance\"} / node_filesystem_size_bytes{mountpoint=\"/\",fstype!~\"tmpfs|overlay\",instance=\"$instance\"})) * 100","datasource":{"type":"prometheus","uid":"prometheus"}}]},
+          { "type": "timeseries", "title": "CPU Basic", "gridPos": {"h":8,"w":12,"x":0,"y":6},
+            "targets":[{"expr":"1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\",instance=\"$instance\"}[5m]))","legendFormat":"cpu used","datasource":{"type":"prometheus","uid":"prometheus"}}]},
+          { "type": "timeseries", "title": "Memory Basic", "gridPos": {"h":8,"w":12,"x":12,"y":6},
+            "targets":[
+              {"expr":"node_memory_MemTotal_bytes{instance=\"$instance\"}","legendFormat":"Total","datasource":{"type":"prometheus","uid":"prometheus"}},
+              {"expr":"node_memory_MemTotal_bytes{instance=\"$instance\"} - node_memory_MemAvailable_bytes{instance=\"$instance\"}","legendFormat":"Used","datasource":{"type":"prometheus","uid":"prometheus"}}
+            ]},
+          { "type": "timeseries", "title": "Disk Space Used Basic", "gridPos": {"h":8,"w":12,"x":0,"y":14},
+            "targets":[{"expr":"(node_filesystem_size_bytes{mountpoint=\"/\",fstype!~\"tmpfs|overlay\",instance=\"$instance\"} - node_filesystem_avail_bytes{mountpoint=\"/\",fstype!~\"tmpfs|overlay\",instance=\"$instance\"})","legendFormat":"Used /","datasource":{"type":"prometheus","uid":"prometheus"}}]},
+          { "type": "stat", "title": "Uptime", "gridPos": {"h":8,"w":12,"x":12,"y":14},
+            "targets":[{"expr":"time() - node_boot_time_seconds{instance=\"$instance\"}","datasource":{"type":"prometheus","uid":"prometheus"}}]}
         ]
       }
       {% endraw %}
