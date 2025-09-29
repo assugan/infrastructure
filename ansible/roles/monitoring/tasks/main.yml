@@ -63,8 +63,8 @@
           static_configs:
             - targets: ['node-exporter:9100']
 
-        # cAdvisor ->  'docker'
-        - job_name: 'docker'
+        # cAdvisor ->  'cadvisor'
+        - job_name: 'cadvisor'
           static_configs:
             - targets: ['cadvisor:8080']
 
