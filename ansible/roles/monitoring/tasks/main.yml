@@ -338,11 +338,13 @@
       }
 
 # === NEW: локальный дашборд для cAdvisor, работает с job="cadvisor" и label name=имя_контейнера ===
+# === FIX: локальный дашборд для cAdvisor, обернут в {% raw %}…{% endraw %} ===
 - name: Drop Grafana dashboard (Docker / cAdvisor local)
   copy:
     dest: /opt/monitoring/grafana/dashboards/cadvisor-local.json
     mode: "0644"
-    content: |
+    content: |-
+      {% raw %}
       {
         "uid": "cadvisor-local",
         "title": "Docker containers (cAdvisor)",
@@ -365,21 +367,31 @@
           ]
         },
         "panels": [
-          { "type": "timeSeries", "title": "CPU (cores) — rate",
+          {
+            "type": "timeseries",
+            "title": "CPU (cores) — rate",
             "targets": [
               { "expr": "sum by (name)(rate(container_cpu_usage_seconds_total{job=\"cadvisor\",image!=\"\",name=~\"$container\"}[5m]))" }
-            ] },
-          { "type": "timeSeries", "title": "Memory usage (bytes)",
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "Memory usage (bytes)",
             "targets": [
               { "expr": "sum by (name)(container_memory_usage_bytes{job=\"cadvisor\",image!=\"\",name=~\"$container\"})" }
-            ] },
-          { "type": "timeSeries", "title": "Network Rx / Tx (bytes/s)",
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "Network Rx / Tx (bytes/s)",
             "targets": [
               { "expr": "sum by (name)(rate(container_network_receive_bytes_total{job=\"cadvisor\",name=~\"$container\"}[5m]))", "legendFormat": "{{name}} rx" },
               { "expr": "sum by (name)(rate(container_network_transmit_bytes_total{job=\"cadvisor\",name=~\"$container\"}[5m]))", "legendFormat": "{{name}} tx" }
-            ] }
+            ]
+          }
         ]
       }
+      {% endraw %}
 
 - name: Drop Alertmanager config (Telegram)
   copy:
