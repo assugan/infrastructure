@@ -1,0 +1,72 @@
+version: "3.8"
+services:
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.external-url=https://{{ app_domain }}/prometheus"
+      - "--web.route-prefix=/prometheus"
+    volumes:
+      - /opt/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - /opt/monitoring/prometheus/data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    environment:
+      GF_SERVER_DOMAIN: "{{ app_domain }}"
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      # опционально: дефолтный логин/пароль изменить:
+      # GF_SECURITY_ADMIN_USER: "admin"
+      # GF_SECURITY_ADMIN_PASSWORD: "strong-password"
+    volumes:
+      - /opt/monitoring/grafana:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    ports:
+      - "127.0.0.1:9115:9115"
+    restart: unless-stopped
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    pid: host
+    network_mode: host
+    restart: unless-stopped
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:2.9.8
+    command: [ "-config.file=/etc/loki/config.yml" ]
+    volumes:
+      - /opt/monitoring/loki/config.yml:/etc/loki/config.yml:ro
+      - /opt/monitoring/loki:/loki
+    ports:
+      - "127.0.0.1:3100:3100"
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:2.9.8
+    command: [ "-config.file=/etc/promtail/config.yml" ]
+    volumes:
+      - /opt/monitoring/promtail/config.yml:/etc/promtail/config.yml:ro
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    restart: unless-stopped
